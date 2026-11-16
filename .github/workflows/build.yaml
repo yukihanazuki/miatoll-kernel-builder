@@ -48,6 +48,10 @@ jobs:
       CLANG_URL: https://github.com/userariii/AOSP-clang/releases/download/clang-r530567/clang-r530567.tar.gz
       GCC64_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
       GCC32_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git
+      KSU_REPO: https://github.com/tiann/KernelSU.git
+      SUSFS_REPO: https://github.com/sidex15/susfs4ksu-module.git
+      BAKASU_REPO: https://github.com/Baka-SU/BakaSU.git
+      SUKISU_REPO: https://github.com/SukiSU-Nova/SukiSU-Nova.git
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
@@ -76,7 +80,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y \
             git bc bison flex libssl-dev libncurses-dev \
-            libelf-dev xz-utils device-tree-compiler zip unzip wget curl
+            libelf-dev xz-utils device-tree-compiler zip unzip wget curl patch
 
       - name: Prepare defconfig & apply performance preset
         working-directory: kernel
@@ -128,13 +132,13 @@ jobs:
         working-directory: kernel
         run: |
           echo "🔧 Applying KernelSU..."
-          git clone --depth=1 https://github.com/tiann/KernelSU.git kernelsu
+          git clone --depth=1 ${{ env.KSU_REPO }} ksu_source
 
-          # KernelSU common integration for LKMI/LKM
-          mkdir -p drivers/misc/kernelsu
-          cp -r kernelsu/common/* drivers/misc/kernelsu/ 2>/dev/null || true
+          # KernelSU common tree -> drivers/misc/ksu
+          mkdir -p drivers/misc/ksu
+          cp -r ksu_source/common/* drivers/misc/ksu/ 2>/dev/null || true
 
-          # Enable KernelSU config flags
+          # Enable KernelSU config
           scripts/config --file out/.config \
             --enable CONFIG_KERNELSU \
             --enable CONFIG_KERNELSU_LKM \
@@ -150,9 +154,11 @@ jobs:
         working-directory: kernel
         run: |
           echo "🔧 Applying SUSFS..."
-          git clone --depth=1 https://github.com/SUSFS/kernel_susfs.git susfs
+          git clone --depth=1 ${{ env.SUSFS_REPO }} susfs_source
 
-          cp -r susfs/* drivers/misc/susfs/ 2>/dev/null || true
+          # Copy SUSFS sources (module style) into drivers/misc/susfs
+          mkdir -p drivers/misc/susfs
+          cp -r susfs_source/* drivers/misc/susfs/ 2>/dev/null || true
 
           scripts/config --file out/.config \
             --enable CONFIG_SUSFS \
@@ -162,14 +168,15 @@ jobs:
           make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
           echo "✅ SUSFS applied"
 
-      - name: Apply BakaSu
+      - name: Apply BakaSU
         if: ${{ inputs.root_manager == 'bakasu' }}
         working-directory: kernel
         run: |
-          echo "🔧 Applying BakaSu..."
-          git clone --depth=1 https://github.com/rikka0w0/BakaSu.git bakasu
+          echo "🔧 Applying BakaSU..."
+          git clone --depth=1 ${{ env.BAKASU_REPO }} bakasu_source
 
-          cp -r bakasu/* drivers/misc/bakasu/ 2>/dev/null || true
+          mkdir -p drivers/misc/bakasu
+          cp -r bakasu_source/* drivers/misc/bakasu/ 2>/dev/null || true
 
           scripts/config --file out/.config \
             --enable CONFIG_BAKASU \
@@ -177,16 +184,17 @@ jobs:
             --disable DEBUG_KERNEL
 
           make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
-          echo "✅ BakaSu applied"
+          echo "✅ BakaSU applied"
 
       - name: Apply SukiSu Nova
         if: ${{ inputs.root_manager == 'sukisu-nova' }}
         working-directory: kernel
         run: |
           echo "🔧 Applying SukiSu Nova..."
-          git clone --depth=1 https://github.com/rikka0w0/SukiSu-nova.git sukisu
+          git clone --depth=1 ${{ env.SUKISU_REPO }} sukisu_source
 
-          cp -r sukisu/* drivers/misc/sukisu/ 2>/dev/null || true
+          mkdir -p drivers/misc/sukisu
+          cp -r sukisu_source/* drivers/misc/sukisu/ 2>/dev/null || true
 
           scripts/config --file out/.config \
             --enable CONFIG_SUKISU_NOVA \
