@@ -1,0 +1,203 @@
+name: Build Miatoll Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_name:
+        description: 'Custom kernel name (zip filename & kernel suffix)'
+        required: true
+        default: 'MiatollKernel'
+      perf_preset:
+        description: 'Performance preset'
+        required: true
+        default: 'balanced'
+        type: choice
+        options:
+          - performance
+          - balanced
+          - battery
+      release:
+        description: 'Publish to GitHub Releases as well'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      KERNEL_REPO: yukihanazuki/miatoll_neko-kernel
+      KERNEL_BRANCH: 16
+      DEFCONFIG: vendor/xiaomi/miatoll_defconfig
+      DTB_FILE: arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
+      ANYKERNEL3_REPO: https://github.com/osm0sis/AnyKernel3.git
+      ANYKERNEL3_BRANCH: master
+      CLANG_URL: https://github.com/userariii/AOSP-clang/releases/download/clang-r530567/clang-r530567.tar.gz
+      GCC64_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
+      GCC32_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.KERNEL_REPO }}
+          ref: ${{ env.KERNEL_BRANCH }}
+          path: kernel
+          fetch-depth: 1
+
+      - name: Clone toolchains (clang + gcc 4.9)
+        working-directory: kernel
+        run: |
+          # AOSP clang (same toolchain family used by this device's builds)
+          mkdir clang && cd clang
+          wget -q ${{ env.CLANG_URL }} -O clang.tar.gz
+          tar -xzf clang.tar.gz
+          rm -f clang.tar.gz
+          cd ..
+
+          # LineageOS gcc 4.9 cross compilers
+          git clone --depth=1 ${{ env.GCC64_URL }} gcc64
+          git clone --depth=1 ${{ env.GCC32_URL }} gcc32
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            git bc bison flex libssl-dev libncurses5-dev libncursesw5-dev \
+            libelf-dev xz-utils dtc zip unzip wget
+
+      - name: Prepare defconfig & apply performance preset
+        working-directory: kernel
+        run: |
+          chmod +x scripts/config 2>/dev/null || true
+
+          # Load defconfig from vendor subtree
+          mkdir -p out
+          cp arch/arm64/configs/${DEFCONFIG} out/.config
+
+          # Custom kernel suffix via CONFIG_LOCALVERSION
+          scripts/config --file out/.config --set-str LOCALVERSION "-${{ inputs.kernel_name }}"
+
+          # Performance presets
+          case "${{ inputs.perf_preset }}" in
+            performance)
+              scripts/config --file out/.config \
+                --enable CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
+                --disable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+                --disable CPU_FREQ_DEFAULT_GOV_POWERSAVE \
+                --disable DEBUG_INFO \
+                --disable DEBUG_KERNEL
+              ;;
+            balanced)
+              scripts/config --file out/.config \
+                --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+                --disable CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
+                --disable CPU_FREQ_DEFAULT_GOV_POWERSAVE \
+                --disable DEBUG_INFO \
+                --disable DEBUG_KERNEL
+              ;;
+            battery)
+              scripts/config --file out/.config \
+                --enable CPU_FREQ_DEFAULT_GOV_POWERSAVE \
+                --disable CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
+                --disable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+                --disable DEBUG_INFO \
+                --disable DEBUG_KERNEL
+              ;;
+          esac
+
+          make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
+
+          echo "--- Applied kernel config ---"
+          grep -E "CONFIG_LOCALVERSION|CPU_FREQ_DEFAULT_GOV|DEBUG_INFO|DEBUG_KERNEL" out/.config
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          export PATH="${KERNEL_DIR:-$(pwd)}/clang/bin:${KERNEL_DIR:-$(pwd)}/gcc64/bin:${KERNEL_DIR:-$(pwd)}/gcc32/bin:$PATH"
+
+          if [ "$(cat /sys/devices/system/cpu/smt/active 2>/dev/null)" = "1" ]; then
+            THREADS=$(( $(nproc --all) * 2 ))
+          else
+            THREADS=$(nproc --all)
+          fi
+          echo "Build threads: $THREADS"
+
+          make O=out ARCH=arm64 CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            HOSTCC=clang HOSTCXX=clang++ \
+            HOSTCFLAGS="-fuse-ld=lld -Wno-unused-command-line-argument" \
+            LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip READELF=llvm-readelf OBJSIZE=llvm-size \
+            Image.gz dtbs dtbo.img > build.log 2>&1 || {
+              echo "❌ Build failed. Last lines of build.log:"
+              tail -n 80 build.log
+              exit 1
+            }
+
+          if [ ! -f out/arch/arm64/boot/Image.gz ]; then
+            echo "❌ Build failed: Image.gz not produced"
+            tail -n 80 build.log
+            exit 1
+          fi
+
+          echo "✅ Build completed: Image.gz produced"
+
+      - name: Package with AnyKernel3
+        run: |
+          KNAME="${{ inputs.kernel_name }}"
+          DATE=$(date +%Y%m%d-%H%M)
+          ZIP="${KNAME}-miatoll-${DATE}.zip"
+
+          # Sanitize tag name (no spaces / special chars for Git tags)
+          TAGNAME=$(echo "kernel-${KNAME}-${DATE}" | tr ' ' '-' | sed 's/[^A-Za-z0-9._-]/-/g')
+          echo "TAGNAME=${TAGNAME}" >> $GITHUB_ENV
+          echo "ZIP_NAME=${ZIP}" >> $GITHUB_ENV
+
+          git clone --depth=1 -b ${{ env.ANYKERNEL3_BRANCH }} ${{ env.ANYKERNEL3_REPO }} AnyKernel3
+          mkdir -p AnyKernel3/dtb
+
+          cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/
+          cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/ 2>/dev/null || true
+
+          DTB_NAME="$(basename ${{ env.DTB_FILE }})"
+          cp kernel/out/arch/arm64/boot/dts/qcom/${DTB_NAME} AnyKernel3/dtb/ 2>/dev/null || true
+
+          cd AnyKernel3
+          ZIPFILES="Image.gz dtb anykernel.sh"
+          if [ -f dtbo.img ]; then
+            ZIPFILES="$ZIPFILES dtbo.img"
+          fi
+          zip -r9 "${ZIP}" $ZIPFILES
+          md5sum "${ZIP}" > "${ZIP}.md5"
+          cd ..
+
+          echo "ZIP_PATH=AnyKernel3/${ZIP}" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_PATH }}
+
+      - name: Create GitHub Release
+        if: ${{ inputs.release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAGNAME }}
+          name: ${{ inputs.kernel_name }} Kernel for Miatoll (SM6250)
+          body: |
+            **Built from** ${{ env.KERNEL_REPO }}@${{ env.KERNEL_BRANCH }}
+
+            **Kernel name**: ${{ inputs.kernel_name }}
+
+            **Performance preset**: ${{ inputs.perf_preset }}
+
+            **Workflow run**: ${{ github.run_id }} (#${{ github.run_number }})
+
+            Download the flashable zip below or from the Actions tab.
+          files: ${{ env.ZIP_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
