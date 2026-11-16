@@ -134,11 +134,33 @@ jobs:
           echo "🔧 Applying KernelSU..."
           git clone --depth=1 ${{ env.KSU_REPO }} ksu_source
 
-          # KernelSU common tree -> drivers/misc/ksu
-          mkdir -p drivers/misc/ksu
-          cp -r ksu_source/common/* drivers/misc/ksu/ 2>/dev/null || true
+          # KernelSU core -> drivers/kernelsu/ (contains Kconfig, Kbuild, Makefile, core/, include/, hook/, ...)
+          mkdir -p drivers/kernelsu
+          cp -r ksu_source/kernel/* drivers/kernelsu/ 2>/dev/null || true
 
-          # Enable KernelSU config
+          # Add Kconfig source line
+          KCONFIG_FILE="drivers/Kconfig"
+          if grep -q "kernelsu" "$KCONFIG_FILE" 2>/dev/null; then
+            echo "✅ Kconfig already has kernelsu"
+          else
+            # Insert after "source \"drivers/\" section or at end of file
+            # Simple approach: append source line before the last line
+            echo "" >> "$KCONFIG_FILE"
+            echo "# KernelSU" >> "$KCONFIG_FILE"
+            echo "source \"drivers/kernelsu/Kconfig\"" >> "$KCONFIG_FILE"
+          fi
+
+          # Add Makefile obj line
+          KMAKEFILE="drivers/Makefile"
+          if grep -q "kernelsu" "$KMAKEFILE" 2>/dev/null; then
+            echo "✅ Makefile already has kernelsu"
+          else
+            echo "" >> "$KMAKEFILE"
+            echo "# KernelSU" >> "$KMAKEFILE"
+            echo "obj-$(CONFIG_KERNELSU) += kernelsu/" >> "$KMAKEFILE"
+          fi
+
+          # Enable config via scripts/config
           scripts/config --file out/.config \
             --enable CONFIG_KERNELSU \
             --enable CONFIG_KERNELSU_LKM \
@@ -147,7 +169,7 @@ jobs:
             --disable DEBUG_KERNEL
 
           make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
-          echo "✅ KernelSU applied"
+          echo "✅ KernelSU applied with Kconfig/Makefile integration"
 
       - name: Apply SUSFS
         if: ${{ inputs.root_manager == 'susfs' }}
