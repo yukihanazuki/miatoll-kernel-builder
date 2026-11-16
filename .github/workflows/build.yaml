@@ -43,7 +43,7 @@ jobs:
       KERNEL_BRANCH: 16
       DEFCONFIG: vendor/xiaomi/miatoll_defconfig
       DTB_FILE: arch/arm64/boot/dts/qcom/cust-atoll-ab.dtb
-      ANYKERNEL3_REPO: https://github.com/osm0sis/AnyKernel3.git
+      ANYKERNEL3_REPO: https://github.com/userariii/AnyKernel3.git
       ANYKERNEL3_BRANCH: master
       CLANG_URL: https://github.com/userariii/AOSP-clang/releases/download/clang-r530567/clang-r530567.tar.gz
       GCC64_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
@@ -295,12 +295,15 @@ jobs:
           DTB_NAME="$(basename ${{ env.DTB_FILE }})"
           cp kernel/out/arch/arm64/boot/dts/qcom/${DTB_NAME} AnyKernel3/dtb/ 2>/dev/null || true
 
+          # Ganti kernel.string dengan nama kernel custom dari input
           cd AnyKernel3
-          ZIPFILES="Image.gz dtb anykernel.sh"
-          if [ -f dtbo.img ]; then
-            ZIPFILES="$ZIPFILES dtbo.img"
-          fi
-          zip -r9 "${ZIP}" $ZIPFILES
+          sed -i "s/kernel.string=.*/kernel.string=${KNAME} Kernel/" anykernel.sh
+          cd ..
+
+          cd AnyKernel3
+          # Zip semua file (termasih META-INF, tools, anykernel.sh, image, dtb, dll)
+          # Kecuali .git agar tidak ikut dalam zip
+          find . -path ./.git -prune -o -type f -print | zip -r9 "${ZIP}" -@
           md5sum "${ZIP}" > "${ZIP}.md5"
           cd ..
 
