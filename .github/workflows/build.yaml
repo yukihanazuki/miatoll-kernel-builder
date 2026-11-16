@@ -113,8 +113,8 @@ jobs:
 
           make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
 
-          echo "--- Applied kernel config (bawaan repo) ---"
-          grep -E "CONFIG_CPU_FREQ_DEFAULT_GOV|DEBUG_INFO|DEBUG_KERNEL" out/.config
+          echo "--- Applied kernel config (bawaan repo + NekoWhisker) ---"
+          grep -E "CONFIG_LOCALVERSION|CONFIG_CPU_FREQ_DEFAULT_GOV|DEBUG_INFO|DEBUG_KERNEL" out/.config
 
       - name: Apply BakaSu
         if: ${{ inputs.root_manager == 'bakasu' }}
@@ -201,6 +201,7 @@ jobs:
           cd AnyKernel3
           # Ganti kernel.string di anykernel.sh dengan nama custom
           sed -i "s/kernel.string=.*/kernel.string=NekoWhisker Kernel/" anykernel.sh
+          echo "AnyKernel kernel.string: $(grep '^kernel.string=' anykernel.sh)"
           find . -path ./.git -prune -o -type f -print | zip -r9 "${ZIP}" -@
           md5sum "${ZIP}" > "${ZIP}.md5"
           cd ..
