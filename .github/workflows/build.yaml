@@ -64,8 +64,8 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
-            git bc bison flex libssl-dev libncurses5-dev libncursesw5-dev \
-            libelf-dev xz-utils dtc zip unzip wget
+            git bc bison flex libssl-dev libncurses-dev \
+            libelf-dev xz-utils device-tree-compiler zip unzip wget
 
       - name: Prepare defconfig & apply performance preset
         working-directory: kernel
@@ -115,7 +115,22 @@ jobs:
       - name: Build kernel
         working-directory: kernel
         run: |
-          export PATH="${KERNEL_DIR:-$(pwd)}/clang/bin:${KERNEL_DIR:-$(pwd)}/gcc64/bin:${KERNEL_DIR:-$(pwd)}/gcc32/bin:$PATH"
+          KERNEL_DIR="$(pwd)"
+
+          # Locate clang binary dir (tarball may extract with or without version subfolder)
+          CLANG_BIN="${KERNEL_DIR}/clang/bin"
+          if [ ! -x "${CLANG_BIN}/clang" ]; then
+            for d in "${KERNEL_DIR}"/clang/*/; do
+              if [ -x "${d}bin/clang" ]; then
+                CLANG_BIN="${d}bin"
+                break
+              fi
+            done
+          fi
+          export PATH="${CLANG_BIN}:${KERNEL_DIR}/gcc64/bin:${KERNEL_DIR}/gcc32/bin:$PATH"
+
+          echo "CC: $(command -v clang)"
+          clang --version | head -n 2
 
           if [ "$(cat /sys/devices/system/cpu/smt/active 2>/dev/null)" = "1" ]; then
             THREADS=$(( $(nproc --all) * 2 ))
