@@ -1,12 +1,8 @@
-name: Build Miatoll Kernel
+name: Build Miatoll Kernel (BakaSu)
 
 on:
   workflow_dispatch:
     inputs:
-      kernel_name:
-        description: 'Custom kernel name (zip filename & kernel suffix)'
-        required: true
-        default: 'MiatollKernel'
       perf_preset:
         description: 'Performance preset'
         required: true
@@ -17,16 +13,12 @@ on:
           - balanced
           - battery
       root_manager:
-        description: 'Root manager (patch di kernel source)'
+        description: 'Root manager (only BakaSu supported)'
         required: true
-        default: 'none'
+        default: 'bakasu'
         type: choice
         options:
-          - none
-          - kernelsu
-          - susfs
           - bakasu
-          - sukisu-nova
       release:
         description: 'Publish to GitHub Releases as well'
         required: false
@@ -48,10 +40,7 @@ jobs:
       CLANG_URL: https://github.com/userariii/AOSP-clang/releases/download/clang-r530567/clang-r530567.tar.gz
       GCC64_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
       GCC32_URL: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git
-      KSU_REPO: https://github.com/tiann/KernelSU.git
-      SUSFS_REPO: https://github.com/sidex15/susfs4ksu-module.git
       BAKASU_REPO: https://github.com/Baka-SU/BakaSU.git
-      SUKISU_REPO: https://github.com/SukiSU-Nova/SukiSU-Nova.git
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
@@ -87,14 +76,12 @@ jobs:
         run: |
           chmod +x scripts/config 2>/dev/null || true
 
-          # Load defconfig from vendor subtree
+          # Load defconfig from vendor subtree - INI adalah konfigurasi bawaan repo,
+          # jadi kita TIDAK set LOCALVERSION agar nama kernel tetap "bawaan"
           mkdir -p out
           cp arch/arm64/configs/${DEFCONFIG} out/.config
 
-          # Custom kernel suffix via CONFIG_LOCALVERSION
-          scripts/config --file out/.config --set-str LOCALVERSION "-${{ inputs.kernel_name }}"
-
-          # Performance presets
+          # Performance presets - applied to bawaan config
           case "${{ inputs.perf_preset }}" in
             performance)
               scripts/config --file out/.config \
@@ -124,77 +111,14 @@ jobs:
 
           make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
 
-          echo "--- Applied kernel config ---"
-          grep -E "CONFIG_LOCALVERSION|CPU_FREQ_DEFAULT_GOV|DEBUG_INFO|DEBUG_KERNEL" out/.config
+          echo "--- Applied kernel config (bawaan repo) ---"
+          grep -E "CONFIG_CPU_FREQ_DEFAULT_GOV|DEBUG_INFO|DEBUG_KERNEL" out/.config
 
-      - name: Apply KernelSU
-        if: ${{ inputs.root_manager == 'kernelsu' }}
-        working-directory: kernel
-        run: |
-          echo "🔧 Applying KernelSU..."
-          git clone --depth=1 ${{ env.KSU_REPO }} ksu_source
-
-          # KernelSU core -> drivers/kernelsu/ (contains Kconfig, Kbuild, Makefile, core/, include/, hook/, ...)
-          mkdir -p drivers/kernelsu
-          cp -r ksu_source/kernel/* drivers/kernelsu/ 2>/dev/null || true
-
-          # Add Kconfig source line
-          KCONFIG_FILE="drivers/Kconfig"
-          if grep -q "kernelsu" "$KCONFIG_FILE" 2>/dev/null; then
-            echo "✅ Kconfig already has kernelsu"
-          else
-            # Insert after "source \"drivers/\" section or at end of file
-            # Simple approach: append source line before the last line
-            echo "" >> "$KCONFIG_FILE"
-            echo "# KernelSU" >> "$KCONFIG_FILE"
-            echo "source \"drivers/kernelsu/Kconfig\"" >> "$KCONFIG_FILE"
-          fi
-
-          # Add Makefile obj line
-          KMAKEFILE="drivers/Makefile"
-          if grep -q "kernelsu" "$KMAKEFILE" 2>/dev/null; then
-            echo "✅ Makefile already has kernelsu"
-          else
-            echo "" >> "$KMAKEFILE"
-            echo "# KernelSU" >> "$KMAKEFILE"
-            echo "obj-$(CONFIG_KERNELSU) += kernelsu/" >> "$KMAKEFILE"
-          fi
-
-          # Enable config via scripts/config
-          scripts/config --file out/.config \
-            --enable CONFIG_KERNELSU \
-            --enable CONFIG_KERNELSU_LKM \
-            --set-str CONFIG_KERNELSU_VERSION_CODE 10000 \
-            --disable DEBUG_INFO \
-            --disable DEBUG_KERNEL
-
-          make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
-          echo "✅ KernelSU applied with Kconfig/Makefile integration"
-
-      - name: Apply SUSFS
-        if: ${{ inputs.root_manager == 'susfs' }}
-        working-directory: kernel
-        run: |
-          echo "🔧 Applying SUSFS..."
-          git clone --depth=1 ${{ env.SUSFS_REPO }} susfs_source
-
-          # Copy SUSFS sources (module style) into drivers/misc/susfs
-          mkdir -p drivers/misc/susfs
-          cp -r susfs_source/* drivers/misc/susfs/ 2>/dev/null || true
-
-          scripts/config --file out/.config \
-            --enable CONFIG_SUSFS \
-            --disable DEBUG_INFO \
-            --disable DEBUG_KERNEL
-
-          make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
-          echo "✅ SUSFS applied"
-
-      - name: Apply BakaSU
+      - name: Apply BakaSu
         if: ${{ inputs.root_manager == 'bakasu' }}
         working-directory: kernel
         run: |
-          echo "🔧 Applying BakaSU..."
+          echo "🔧 Applying BakaSu..."
           git clone --depth=1 ${{ env.BAKASU_REPO }} bakasu_source
 
           mkdir -p drivers/misc/bakasu
@@ -206,25 +130,7 @@ jobs:
             --disable DEBUG_KERNEL
 
           make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
-          echo "✅ BakaSU applied"
-
-      - name: Apply SukiSu Nova
-        if: ${{ inputs.root_manager == 'sukisu-nova' }}
-        working-directory: kernel
-        run: |
-          echo "🔧 Applying SukiSu Nova..."
-          git clone --depth=1 ${{ env.SUKISU_REPO }} sukisu_source
-
-          mkdir -p drivers/misc/sukisu
-          cp -r sukisu_source/* drivers/misc/sukisu/ 2>/dev/null || true
-
-          scripts/config --file out/.config \
-            --enable CONFIG_SUKISU_NOVA \
-            --disable DEBUG_INFO \
-            --disable DEBUG_KERNEL
-
-          make ARCH=arm64 O=out olddefconfig >/dev/null 2>&1
-          echo "✅ SukiSu Nova applied"
+          echo "✅ BakaSu applied"
 
       - name: Build kernel
         working-directory: kernel
@@ -276,16 +182,10 @@ jobs:
 
       - name: Package with AnyKernel3
         run: |
-          KNAME="${{ inputs.kernel_name }}"
-          ROOTMGR="${{ inputs.root_manager }}"
           DATE=$(date +%Y%m%d-%H%M)
-          ZIP="${KNAME}-miatoll-${ROOTMGR}-${DATE}.zip"
+          ZIP="Miatoll-bakasu-${DATE}.zip"
 
-          # Sanitize tag name (no spaces / special chars for Git tags)
-          TAGNAME=$(echo "kernel-${KNAME}-${ROOTMGR}-${DATE}" | tr ' ' '-' | sed 's/[^A-Za-z0-9._-]/-/g')
-          echo "TAGNAME=${TAGNAME}" >> $GITHUB_ENV
-          echo "ZIP_NAME=${ZIP}" >> $GITHUB_ENV
-
+          # Clone AnyKernel3 (userariii version already has miatoll device config)
           git clone --depth=1 -b ${{ env.ANYKERNEL3_BRANCH }} ${{ env.ANYKERNEL3_REPO }} AnyKernel3
           mkdir -p AnyKernel3/dtb
 
@@ -295,19 +195,15 @@ jobs:
           DTB_NAME="$(basename ${{ env.DTB_FILE }})"
           cp kernel/out/arch/arm64/boot/dts/qcom/${DTB_NAME} AnyKernel3/dtb/ 2>/dev/null || true
 
-          # Ganti kernel.string dengan nama kernel custom dari input
+          # Zip SEMUA file (kecuali .git) agar META-INF dan tools ikut masuk
           cd AnyKernel3
-          sed -i "s/kernel.string=.*/kernel.string=${KNAME} Kernel/" anykernel.sh
-          cd ..
-
-          cd AnyKernel3
-          # Zip semua file (termasih META-INF, tools, anykernel.sh, image, dtb, dll)
-          # Kecuali .git agar tidak ikut dalam zip
           find . -path ./.git -prune -o -type f -print | zip -r9 "${ZIP}" -@
           md5sum "${ZIP}" > "${ZIP}.md5"
           cd ..
 
-          echo "ZIP_PATH=AnyKernel3/${ZIP}" >> $GITHUB_ENV
+          ZIP_PATH=AnyKernel3/${ZIP}
+          echo "ZIP_NAME=${ZIP}" >> $GITHUB_ENV
+          echo "ZIP_PATH=${ZIP_PATH}" >> $GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -319,16 +215,14 @@ jobs:
         if: ${{ inputs.release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.TAGNAME }}
-          name: ${{ inputs.kernel_name }} Kernel for Miatoll (SM6250)
+          tag_name: kernel-bakasu-${{ env.ZIP_NAME }}
+          name: BakaSu Kernel for Miatoll (SM6250)
           body: |
             **Built from** ${{ env.KERNEL_REPO }}@${{ env.KERNEL_BRANCH }}
 
-            **Kernel name**: ${{ inputs.kernel_name }}
-
             **Performance preset**: ${{ inputs.perf_preset }}
 
-            **Root manager**: ${{ inputs.root_manager }}
+            **Root manager**: BakaSu
 
             **Workflow run**: ${{ github.run_id }} (#${{ github.run_number }})
 
